@@ -82,6 +82,53 @@ public sealed class DnsStub(IDnsHost host, ILog log)
         try { _tcp?.Stop(); } catch { }
     }
 
+    /// <summary>Resolve a host's real IPv4 via the upstream resolvers, bypassing our own stub (so a
+    /// magic IP is never returned). Used by the daemon's bypass path to reach the real server.</summary>
+    public async Task<uint?> ResolveRealIpAsync(string host, CancellationToken ct = default)
+    {
+        ushort id = (ushort)Random.Shared.Next(0, 0x10000);
+        var q = new List<byte> { (byte)(id >> 8), (byte)(id & 0xff), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 };
+        q.AddRange(EncodeName(host));
+        q.AddRange(new byte[] { 0, (byte)A, 0, 1 });   // qtype A, class IN
+        try
+        {
+            var resp = await UpstreamAsync(q.ToArray(), ct);
+            return resp == null ? null : FirstAAnswer(resp);
+        }
+        catch { return null; }
+    }
+
+    private static uint? FirstAAnswer(byte[] msg)
+    {
+        if (msg.Length < 12) return null;
+        int qd = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(4));
+        int an = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(6));
+        int off = 12;
+        int SkipName(int o)
+        {
+            while (o < msg.Length)
+            {
+                int len = msg[o];
+                if (len == 0) return o + 1;
+                if ((len & 0xC0) == 0xC0) return o + 2;   // compression pointer
+                o += len + 1;
+            }
+            return o;
+        }
+        for (int i = 0; i < qd; i++) { off = SkipName(off) + 4; }
+        for (int i = 0; i < an && off + 10 <= msg.Length; i++)
+        {
+            off = SkipName(off);
+            ushort type = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(off));
+            int rdlen = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(off + 8));
+            int rdata = off + 10;
+            if (type == A && rdlen == 4 && rdata + 4 <= msg.Length)
+                return BinaryPrimitives.ReadUInt32BigEndian(msg.AsSpan(rdata, 4));
+            off = rdata + rdlen;
+        }
+        return null;
+    }
+
     private async Task UdpLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -177,14 +224,12 @@ public sealed class DnsStub(IDnsHost host, ILog log)
         {
             var chans = host.ActiveChannelIds();
             var rules = pol.HostRules(qname, chans);
-            // Acquire a magic IP when the name is tunnelled and never bypassed in any active channel.
-            // This covers Private (acquireIfUnresolved names, all tunnel-only) and extends to the
-            // M365 profile's tunnel-only hostnames. Names with any Bypass rule (e.g. classic
-            // IMAP/SMTP on outlook.office365.com) resolve upstream and go direct, so we never
-            // black-hole a flow we can't actually bypass without a userspace TCP stack.
+            // Acquire a magic IP whenever the name is tunnelled on at least one port. Names that
+            // are also bypassed on other ports still get a magic IP; the daemon splits per port,
+            // tunnelling some flows and terminating the bypassed ones in its userspace TCP stack
+            // to reach the real server directly. Names with no Tunnel rule resolve upstream (direct).
             bool hasTunnel = rules.Any(r => r.Action == "Tunnel");
-            bool hasBypass = rules.Any(r => r.Action == "Bypass");
-            if (hasTunnel && !hasBypass)
+            if (hasTunnel)
             {
                 if (qtype == A) return ReplyA(msg, MagicFor(qname));
                 if (qtype is AAAA or HTTPS) return NoData(msg);

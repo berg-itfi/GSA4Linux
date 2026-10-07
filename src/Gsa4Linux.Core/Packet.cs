@@ -8,7 +8,7 @@ public sealed class Packet
 {
     public const byte TCP = 6;
     public const byte UDP = 17;
-    public const byte FIN = 0x01, SYN = 0x02, RST = 0x04, ACK = 0x10;
+    public const byte FIN = 0x01, SYN = 0x02, RST = 0x04, PSH = 0x08, ACK = 0x10;
 
     public byte[] Raw { get; }
     public int Ihl { get; }

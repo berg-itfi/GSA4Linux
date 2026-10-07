@@ -13,7 +13,7 @@ public sealed class Gsa4Daemon : IDnsHost
 
     private readonly string[] _channelsWanted;
     private readonly ILog _log;
-    private readonly ConcurrentDictionary<FlowKey, Flow> _flows = new();
+    private readonly ConcurrentDictionary<FlowKey, IFlow> _flows = new();
     private readonly Dictionary<string, ControlChannel> _controls = new();
     private readonly object _controlsLock = new();
 
@@ -224,32 +224,38 @@ public sealed class Gsa4Daemon : IDnsHost
         var pkt = Packet.Parse(raw);
         if (pkt == null) return;
         var key = pkt.Key;
-        if (_flows.TryGetValue(key, out var existing)) { await existing.SendUpAsync(raw); return; }
+        if (_flows.TryGetValue(key, out var existing)) { await existing.OnPacketAsync(raw); return; }
         if (pkt.Proto == Packet.TCP && (pkt.Flags & Packet.SYN) == 0) return; // not a connection start
 
         string host = _dns?.HostForMagic(pkt.Dst) ?? "";
-        var candidates = CandidatesFor(pkt, host);
-        if (candidates.Count == 0) return;
+        if (Policy == null) return;
 
-        var flow = new Flow(this, candidates, key, raw, host, _log);
-        _flows[key] = flow;
-        _ = Task.Run(() => flow.StartAsync(_session?.Token ?? ct), ct);
-    }
-
-    private List<(ControlChannel, Rule)> CandidatesFor(Packet pkt, string host)
-    {
-        var outp = new List<(ControlChannel, Rule)>();
-        if (Policy == null) return outp;
         Dictionary<string, ControlChannel> byId;
         lock (_controlsLock)
             byId = _controls.Values.Where(c => c.Ready).ToDictionary(c => c.Chan.Id, c => c);
         var rules = Policy.EvaluateAll(pkt.Proto, pkt.Dst, pkt.DPort,
                                        host.Length == 0 ? null : host, byId.Keys.ToHashSet());
-        foreach (var r in rules)
-            if (r.Action == "Tunnel" && byId.TryGetValue(r.ChannelId, out var cc))
-                outp.Add((cc, r));
-        return outp;
+        if (rules.Count == 0) return;
+
+        IFlow flow;
+        if (rules[0].Action == "Bypass")
+        {
+            // winner is Bypass but we're on a magic IP: terminate locally and go direct to the server
+            flow = new BypassFlow(this, key, raw, host, _log);
+        }
+        else
+        {
+            var candidates = rules.Where(r => r.Action == "Tunnel" && byId.ContainsKey(r.ChannelId))
+                                  .Select(r => (byId[r.ChannelId], r)).ToList();
+            if (candidates.Count == 0) return;
+            flow = new Flow(this, candidates, key, raw, host, _log);
+        }
+        _flows[key] = flow;
+        _ = Task.Run(() => flow.StartAsync(_session?.Token ?? ct), ct);
     }
+
+    public Task<uint?> ResolveRealIpAsync(string host) =>
+        _dns?.ResolveRealIpAsync(host, _lifetime.Token) ?? Task.FromResult<uint?>(null);
 
     // --- control socket (tray applet talks to this) ---
     private async Task ControlSocketLoop(CancellationToken ct)

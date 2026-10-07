@@ -97,13 +97,16 @@ sudo journalctl -u gsa4linuxd -f
 ## Caveats
 
 * Both the Private and M365 channels are wired up and verified (Private Access HTTPS/SMB; M365
-  SharePoint over TLS). Steering is DNS-based: a hostname is tunnelled when it matches a Tunnel
-  rule with no Bypass rule in the active channels. Consequences:
-  * M365 names that are tunnelled on some ports but bypassed on others (e.g. classic IMAP/SMTP on
-    `outlook.office365.com`) resolve upstream and go **direct** rather than being black-holed —
-    doing a true split per-port bypass would need a userspace TCP stack (lwIP), which the macOS
-    client embeds but this port does not.
-  * Connections to literal M365 IPs with no DNS lookup are not steered.
+  SharePoint and per-port-split outlook.office365.com over TLS). Steering is DNS-based: a hostname
+  gets a magic IP when it matches any Tunnel rule; the daemon then decides per flow:
+  * **Tunnel** ports go through the edge.
+  * **Bypass** ports on the same name (e.g. IMAP/SMTP 993/587 on `outlook.office365.com`, which
+    tunnels 80/443) are terminated in a small **userspace TCP stack** (`Core/Tcp.cs`) and spliced
+    to a kernel socket opened directly to the real server — a true per-port split, no black-holing.
+  * The userspace stack is pragmatic (passive open, in-order receive, single-segment retransmit
+    with backoff, fixed window, no SACK/window-scaling) — fine for TLS/IMAP/HTTP, not a general
+    TCP. Connections to literal M365 IPs with no DNS lookup are still not steered, and UDP bypass
+    on a magic IP does not arise (bypassed UDP endpoints in policy are IP-literal).
 * Rules whose `appAuthorizationTokenContext` requires MFA via Conditional Access can't be
   satisfied by the silent broker; the daemon falls through to the next matching rule.
 * While enabled, system DNS is pointed at the local stub (127.0.0.153). The previous

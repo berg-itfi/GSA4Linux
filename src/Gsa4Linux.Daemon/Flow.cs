@@ -6,8 +6,16 @@ using Microsoft.Naas.Ztna.Grpc.V2;
 namespace Gsa4Linux.Daemon;
 
 /// <summary>One tunnelled flow: bridges raw IPv4 packets between the TUN and a CreateFlow stream.</summary>
+/// <summary>A flow in the TUN data path, whether tunnelled to the edge or bypassed to the real server.</summary>
+public interface IFlow
+{
+    Task StartAsync(CancellationToken ct);
+    Task OnPacketAsync(byte[] raw);
+    Task CloseAsync();
+}
+
 public sealed class Flow(Gsa4Daemon daemon, List<(ControlChannel Ctrl, Rule Rule)> candidates,
-                         FlowKey key, byte[] firstPacket, string host, ILog log)
+                         FlowKey key, byte[] firstPacket, string host, ILog log) : IFlow
 {
     public volatile bool Active = true;
     private FlowConn? _conn;
@@ -88,7 +96,7 @@ public sealed class Flow(Gsa4Daemon daemon, List<(ControlChannel Ctrl, Rule Rule
         }
     }
 
-    public async Task SendUpAsync(byte[] raw)
+    public async Task OnPacketAsync(byte[] raw)
     {
         if (!Active || _conn == null) return;
         try { await _conn.Call.RequestStream.WriteAsync(new ClientFlowMessage { Packet = ByteString.CopyFrom(raw) }); }
