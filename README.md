@@ -96,7 +96,14 @@ sudo journalctl -u gsa4linuxd -f
 
 ## Caveats
 
-* Only the Private channel is exercised in anger; M365 bootstraps but is otherwise untested.
+* Both the Private and M365 channels are wired up and verified (Private Access HTTPS/SMB; M365
+  SharePoint over TLS). Steering is DNS-based: a hostname is tunnelled when it matches a Tunnel
+  rule with no Bypass rule in the active channels. Consequences:
+  * M365 names that are tunnelled on some ports but bypassed on others (e.g. classic IMAP/SMTP on
+    `outlook.office365.com`) resolve upstream and go **direct** rather than being black-holed —
+    doing a true split per-port bypass would need a userspace TCP stack (lwIP), which the macOS
+    client embeds but this port does not.
+  * Connections to literal M365 IPs with no DNS lookup are not steered.
 * Rules whose `appAuthorizationTokenContext` requires MFA via Conditional Access can't be
   satisfied by the silent broker; the daemon falls through to the next matching rule.
 * While enabled, system DNS is pointed at the local stub (127.0.0.153). The previous
