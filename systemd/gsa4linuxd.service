@@ -1,0 +1,24 @@
+[Unit]
+Description=Microsoft Global Secure Access tunnel daemon (.NET, unofficial)
+Documentation=file:///opt/gsa4linux-dotnet/README.md
+Wants=himmelblaud.service network-online.target
+After=himmelblaud.service network-online.target NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/opt/gsa4linux-dotnet/gsa4linuxd
+Environment=GSA4LINUX_CHANNELS=Private
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=gsa4linux
+RuntimeDirectoryMode=0755
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+ProtectHome=read-only
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc /run
+
+[Install]
+WantedBy=multi-user.target

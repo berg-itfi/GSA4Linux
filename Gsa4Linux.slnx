@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Gsa4Linux.Agent/Gsa4Linux.Agent.csproj" />
+    <Project Path="src/Gsa4Linux.Core/Gsa4Linux.Core.csproj" />
+    <Project Path="src/Gsa4Linux.Daemon/Gsa4Linux.Daemon.csproj" />
+    <Project Path="src/Gsa4Linux.Tray/Gsa4Linux.Tray.csproj" />
+  </Folder>
+</Solution>

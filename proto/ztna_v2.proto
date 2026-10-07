@@ -1,0 +1,158 @@
+syntax = "proto3";
+package microsoft.ztna.v2;
+option csharp_namespace = "Microsoft.Naas.Ztna.Grpc.V2";
+// original file options: go_package: "msnaas/protov2"; csharp_namespace: "Microsoft.Naas.Ztna.Grpc.V2";
+enum AgenticTrafficDetectionResult {
+  AGENTIC_TRAFFIC_DETECTION_RESULT_UNSPECIFIED = 0;
+  AGENTIC_TRAFFIC_DETECTION_RESULT_NOT_AGENTIC = 1;
+  AGENTIC_TRAFFIC_DETECTION_RESULT_AGENTIC = 2;
+}
+enum ConnectionProtocol {
+  UNDEFINED = 0;
+  TCP = 6;
+  UDP = 17;
+  IP = 3;
+}
+enum TrafficProfile {
+  PROFILE_UNDEFINED = 0;
+  INTERNET = 1;
+  PRIVATE_ACCESS = 2;
+  M365 = 3;
+}
+enum ClientCapability {
+  CLIENT_CAPABILITY_UNSPECIFIED = 0;
+  SIF_MVP = 1;
+}
+enum CrossTenantAccessType {
+  CROSS_TENANT_ACCESS_NONE = 0;
+  B2B_COLLABORATION = 1;
+}
+enum DeviceJoinType {
+  DEVICE_JOIN_NONE = 0;
+  MICROSOFT_ENTRA_JOINED = 1;
+  MICROSOFT_ENTRA_REGISTERED = 2;
+}
+message ClientFlowMetadata {
+  string correlation_id = 1;
+  string tunnel_id = 2;
+  string destination_ip = 3;
+  string destination_host = 4;
+  int32 destination_port = 5;
+  repeated string client_resolved_ips = 6;
+  string client_invoked_process_name = 7;
+  string app_token = 8;
+  microsoft.ztna.v2.ConnectionProtocol protocol = 9;
+  microsoft.ztna.v2.AgenticTrafficDetectionResult agentic_traffic_detection_result = 10;
+  string agent_name_hint = 11;
+}
+message ClientDeviceInfo {
+  string client_agent_version = 1;
+  string client_os_type = 2;
+  string client_os_version = 3;
+  string client_device_id = 4;
+  string client_os_name = 5;
+  microsoft.ztna.v2.ClientPolicyMetadata client_policy_metadata = 6;
+  string client_device_name = 7;
+  string client_os_architecture = 8;
+  microsoft.ztna.v2.DeviceJoinType client_device_join_type = 9;
+  repeated microsoft.ztna.v2.ClientCapability capabilities = 10;
+  string client_machine_fqdn = 11;
+}
+message ClientPolicyMetadata {
+  string fw_policy_version = 1;
+}
+message ClientFlowMessage {
+  microsoft.ztna.v2.ClientFlowMetadata metadata = 1;
+  bytes packet = 2;
+}
+message ServerFlowMessage {
+  bytes packet = 1;
+}
+message ClientControlMessage {
+  oneof payload {
+    microsoft.ztna.v2.CreateTunnelMessage create_tunnel = 10;
+    microsoft.ztna.v2.CreateTunnelNoTokenMessage create_tunnel_no_token = 12;
+    microsoft.ztna.v2.TunnelAuthenticationRequest authentication_request = 11;
+    microsoft.ztna.v2.FlowAuthenticationRequest flow_authentication_request = 13;
+  }
+  string correlation_vector = 1;
+}
+message ServerControlMessage {
+  oneof payload {
+    microsoft.ztna.v2.TunnelCreatedMessage tunnel_created = 10;
+    microsoft.ztna.v2.TunnelAuthenticationRequired tunnel_authentication_required = 11;
+    microsoft.ztna.v2.TunnelAuthenticationSuccessResponse tunnel_authentication_success_response = 12;
+    microsoft.ztna.v2.TunnelAuthenticationFailedResponse tunnel_authentication_failed_response = 13;
+    microsoft.ztna.v2.TunnelClosedMessage tunnel_closed = 14;
+    microsoft.ztna.v2.FlowClosedMessage flow_closed = 15;
+    microsoft.ztna.v2.FlowAuthenticationSuccessResponse flow_authentication_success = 16;
+    microsoft.ztna.v2.FlowAuthenticationFailureResponse flow_authentication_failure = 17;
+  }
+  string correlation_vector = 1;
+}
+message CreateTunnelMessage {
+  string tunnel_token = 1;
+  microsoft.ztna.v2.ClientDeviceInfo agent_metadata = 2;
+}
+message CreateTunnelNoTokenMessage {
+  microsoft.ztna.v2.ClientDeviceInfo agent_metadata = 1;
+}
+message TunnelAuthenticationSuccessResponse {
+}
+message TunnelAuthenticationFailedResponse {
+}
+message FlowAuthenticationSuccessResponse {
+  string correlation_id = 1;
+}
+message FlowAuthenticationFailureResponse {
+  string correlation_id = 1;
+}
+message TunnelAuthenticationRequest {
+  string tunnel_token = 1;
+}
+message FlowAuthenticationRequest {
+  microsoft.ztna.v2.ClientFlowMetadata metadata = 1;
+}
+message TunnelAuthenticationRequired {
+  string claim_challenge = 1;
+}
+message TunnelCreatedMessage {
+  string tunnel_id = 1;
+  string claim_challenge = 2;
+  string azure_region_display_name = 3;
+  string server_geo_location = 4;
+}
+message TunnelClosedMessage {
+  enum CloseReason {
+    UNKNOWN = 0;
+    TOKEN_EXPIRED = 1;
+  }
+  string tunnel_id = 1;
+  microsoft.ztna.v2.TunnelClosedMessage.CloseReason close_reason = 2;
+  string error_message = 3;
+}
+message FlowClosedReason {
+  enum FlowCloseStatusCode {
+    UNDEFINED = 0;
+    NO_CONTROL_CHANNEL = 1;
+    BLOCKED_BY_WEB_CATEGORY = 2;
+    PORTO_BACKEND_ERROR = 3;
+    PORTO_FRONTEND_ERROR = 4;
+    NON_SERVICE_FAILURE_PRIVATE_ACCESS = 5;
+    BLOCKED_BY_FQDN_RULE = 6;
+  }
+  string close_status_code = 1;
+  string ui_description = 2;
+  string detailed_description = 3;
+  string notification_aggregation_key = 4;
+  string ui_title = 5;
+}
+message FlowClosedMessage {
+  microsoft.ztna.v2.FlowClosedReason reason = 1;
+  string correlation_id = 2;
+  string client_invoked_process_name = 3;
+}
+service Ztna {
+  rpc CreateControlChannel(stream microsoft.ztna.v2.ClientControlMessage) returns (stream microsoft.ztna.v2.ServerControlMessage);
+  rpc CreateFlow(stream microsoft.ztna.v2.ClientFlowMessage) returns (stream microsoft.ztna.v2.ServerFlowMessage);
+}
