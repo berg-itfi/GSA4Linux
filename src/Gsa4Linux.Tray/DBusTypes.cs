@@ -22,7 +22,7 @@ public class StatusNotifierItemProperties
     public string Title = "Global Secure Access";
     public string Status = "Active";          // Active | Passive | NeedsAttention
     public int WindowId = 0;
-    public string IconName = "network-vpn-symbolic";
+    public string IconName = "";   // empty on purpose — see SniItem.Refresh (forces coloured IconPixmap)
     // Rendered status badge (a(iiay): width, height, ARGB32 big-endian) so the colour reads the
     // same in every theme — green=connected, amber=connecting, grey=disabled, red=daemon down.
     public (int, int, byte[])[] IconPixmap = System.Array.Empty<(int, int, byte[])>();

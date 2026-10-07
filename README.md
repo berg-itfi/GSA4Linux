@@ -51,7 +51,7 @@ himmelblau's broker for channel/app tokens, and passes them to the daemon over a
 | `Gsa4Linux.Core`  | library        | —            | proto (built from `proto/ztna_v2.proto`), policy, packet, DNS stub, netcfg, userspace TCP (`Tcp.cs`) |
 | `Gsa4Linux.Daemon`| `gsa4linuxd`   | `gsa4linux` (system, non-root) | TUN, routing, DNS stub, control channels, flow bridging, control socket |
 | `Gsa4Linux.Agent` | `gsa4linux-agent` | you (session) | serves Entra tokens from the himmelblau broker |
-| `Gsa4Linux.Tray`  | `gsa4linux-tray`  | you (session) | StatusNotifierItem tray: Enable/Disable, Debug, status |
+| `Gsa4Linux.Tray`  | `gsa4linux-tray`  | you (session) | StatusNotifierItem tray: colour status badge + Enable/Disable, Debug |
 
 ## Build
 
@@ -98,7 +98,9 @@ systemctl --user enable --now gsa4linux-agent.service gsa4linux-tray.service
 
 ## Operate
 
-The tray applet (Enable / Disable / Debug) is the easy path. From the shell:
+The tray applet auto-starts at login and shows a colour status badge — **green** connected,
+**amber** connecting, **grey** disabled, **red** daemon not running — with Enable / Disable / Debug
+in its menu. From the shell:
 
 ```bash
 # status / pause / resume / debug — line-JSON over the control socket
@@ -119,6 +121,31 @@ or pause/resume, so `nc -U` works as the owner and is refused for anyone else.
 | `GSA4LINUX_UID` | daemon unit | unset → insecure fallback | session user allowed to drive the token/control sockets (sockets are `0600` + chowned to it) |
 | `GSA4LINUX_CHANNELS` | daemon unit | `Private` (shipped unit sets `Private,M365`) | which policy channels to bring up (`Private`, `M365`, or both, comma-separated) |
 | `GSA4LINUX_DEBUG` | daemon unit | off | verbose logging (also toggleable live via the tray / control socket) |
+
+## Intelligent Local Access (ILA)
+
+[ILA](https://learn.microsoft.com/en-us/entra/global-secure-access/enable-intelligent-local-access)
+lets Private Access go **direct** when the device is physically on the corporate network, instead of
+backhauling through the cloud edge. GSA defines *private networks* in the portal (a DNS probe: an
+FQDN + DNS server + the IP it should resolve to on-prem) and assigns Private Access resources to
+them.
+
+This config comes **from GSA** — it is delivered in the same AgentSettings policy, gated by the
+tenant flag `IsPrivateNetworkEnabled`. The client support here:
+
+* parses the flag, the detection interval, and the private-network list (logging the raw JSON the
+  first time the feature is seen enabled, since the exact schema only ships when it's on);
+* DNS-probes each private network on `LocalNetworkDetectionIntervalInMs` (resolve its FQDN against
+  its DNS server; a match inside the corpnet range means we're on that network);
+* when on a detected corp network, the DNS stub resolves that network's names **directly** (returns
+  the real IP) instead of a magic IP, so those flows bypass the tunnel and go local;
+* exposes `ilaEnabled` and `onCorpNet` in the control status.
+
+> The whole ILA path is **inert until the tenant enables `IsPrivateNetworkEnabled`** — which is
+> currently **off** for this tenant, so no client (this one or the official one) bypasses locally
+> yet. The positive path is therefore implemented but not yet verified end-to-end; enable the
+> feature in the portal and check `journalctl -u gsa4linuxd` for the `ILA enabled:` line (it logs
+> the real schema) and `onCorpNet` in status.
 
 ## Security
 

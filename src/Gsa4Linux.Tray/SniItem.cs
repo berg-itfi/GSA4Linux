@@ -16,16 +16,18 @@ public sealed class SniItem(TrayApp app) : IStatusNotifierItem
 
     public void Refresh(ControlClient.Status s)
     {
-        // State → colour + themed fallback name + hover text.
+        // State → colour + hover text. We deliberately leave IconName EMPTY: GNOME's AppIndicator
+        // otherwise renders the themed symbolic icon recoloured to the panel foreground (white) and
+        // ignores our pixmap. With no name, the host uses the coloured IconPixmap badge.
         (byte r, byte g, byte b) colour;
-        string themed, state;
-        if (!s.Reachable) { colour = (0xd0, 0x30, 0x30); themed = "network-vpn-disconnected-symbolic"; state = "daemon not running"; }
-        else if (!s.Enabled) { colour = (0x90, 0x90, 0x90); themed = "network-vpn-disconnected-symbolic"; state = "disabled"; }
-        else if (s.AnyTunnelUp) { colour = (0x2e, 0xa0, 0x43); themed = "network-vpn-symbolic"; state = "connected (" + string.Join(", ", s.Tunnels.Where(t => t.Value).Select(t => t.Key)) + ")"; }
-        else { colour = (0xe0, 0xa0, 0x20); themed = "network-vpn-acquiring-symbolic"; state = "connecting…"; }
+        string state;
+        if (!s.Reachable) { colour = (0xd0, 0x30, 0x30); state = "daemon not running"; }
+        else if (!s.Enabled) { colour = (0x90, 0x90, 0x90); state = "disabled"; }
+        else if (s.AnyTunnelUp) { colour = (0x2e, 0xa0, 0x43); state = "connected (" + string.Join(", ", s.Tunnels.Where(t => t.Value).Select(t => t.Key)) + ")"; }
+        else { colour = (0xe0, 0xa0, 0x20); state = "connecting…"; }
 
-        Props.IconName = themed;
-        Props.IconPixmap = TrayIcon.Badge(colour.r, colour.g, colour.b);
+        Props.IconName = "";
+        Props.IconPixmap = TrayIcon.Badge(colour.r, colour.g, colour.b, check: s.Reachable && s.Enabled && s.AnyTunnelUp);
         Props.Status = s.Enabled && s.Reachable ? "Active" : "Passive";
         Props.Title = "Global Secure Access";
         Props.ToolTip = ("", System.Array.Empty<(int, int, byte[])>(), "Global Secure Access", "GSA: " + state);
