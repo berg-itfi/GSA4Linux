@@ -11,7 +11,7 @@ namespace Gsa4Linux.Daemon;
 /// sends {"cmd": "status" | "enable" | "disable" | "debug", "value": bool?}. Any local user may
 /// read status; enable/disable/debug require a uid >= 1000 (the logged-in user).
 /// </summary>
-public sealed class ControlServer(Gsa4Daemon daemon, ILog log)
+public sealed class ControlServer(Gsa4Daemon daemon, ILog log, uint ownerUid)
 {
     public const string SocketPath = "/run/gsa4linux/control.sock";
 
@@ -22,7 +22,7 @@ public sealed class ControlServer(Gsa4Daemon daemon, ILog log)
         var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixEndPoint(SocketPath));
         listener.Listen(8);
-        NetCfg.Run("chmod", "666", SocketPath);
+        NetCfg.SecureSocket(SocketPath, ownerUid);
 
         while (!ct.IsCancellationRequested)
         {
@@ -62,8 +62,12 @@ public sealed class ControlServer(Gsa4Daemon daemon, ILog log)
         try { cmd = JsonNode.Parse(line)?["cmd"]?.GetValue<string>() ?? ""; }
         catch { return new JsonObject { ["error"] = "bad request" }; }
 
+        // Authorize state-changing commands to the session owner only (GSA-002). The socket is also
+        // locked to the owner at the filesystem layer; this is defense in depth. With no owner
+        // configured, fall back to the old uid>=1000 gate.
         bool mutate = cmd is "enable" or "disable" or "debug";
-        if (mutate && uid < 1000)
+        bool allowed = ownerUid != 0 ? uid == ownerUid : uid >= 1000;
+        if (mutate && !allowed)
             return new JsonObject { ["error"] = "not permitted" };
 
         switch (cmd)

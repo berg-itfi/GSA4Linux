@@ -34,6 +34,24 @@ public static class NetCfg
         return fd;
     }
 
+    /// <summary>
+    /// Lock a just-created unix socket to the session owner (GSA-001/GSA-002). With a known owner
+    /// uid: chown to that uid and chmod 0600 so only that user (and root) can connect. Without one
+    /// (ownerUid==0): fall back to 0666 and warn — the caller also logs the weaker posture.
+    /// </summary>
+    public static void SecureSocket(string path, uint ownerUid)
+    {
+        if (ownerUid != 0)
+        {
+            Run("chown", $"{ownerUid}:{ownerUid}", path);
+            Run("chmod", "600", path);
+        }
+        else
+        {
+            Run("chmod", "666", path);
+        }
+    }
+
     public static void AddRoute(string cidr) => Must("ip", "route", "replace", cidr, "dev", TunName);
     public static void DelRoute(string cidr) => Run("ip", "route", "del", cidr, "dev", TunName);
 
@@ -60,16 +78,30 @@ public static class NetCfg
         sb.AppendLine($"# gsa4linux: previous content saved at {ResolvBackup}");
         sb.AppendLine($"nameserver {stubIp}");
 
-        var target = ResolveSymlink("/etc/resolv.conf");
+        var target = SafeResolvTarget();
         var tmp = target + ".gsa4linux.tmp";
         File.WriteAllText(tmp, sb.ToString());
         File.Move(tmp, target, overwrite: true);
     }
 
+    /// <summary>
+    /// Resolve /etc/resolv.conf's write target and refuse to follow a symlink that leaves the
+    /// root-owned safe directories (GSA-015 hardening): a root write must not be redirected to an
+    /// arbitrary path by a swapped symlink. Only /etc/** and /run/** targets are accepted.
+    /// </summary>
+    private static string SafeResolvTarget()
+    {
+        var target = ResolveSymlink("/etc/resolv.conf");
+        var full = Path.GetFullPath(target);
+        if (!(full.StartsWith("/etc/") || full.StartsWith("/run/")))
+            throw new IOException($"refusing to write resolv.conf through a symlink to {full}");
+        return full;
+    }
+
     public static void RestoreSystemDns()
     {
         if (!File.Exists(ResolvBackup)) return;
-        var target = ResolveSymlink("/etc/resolv.conf");
+        var target = SafeResolvTarget();
         Run("cp", "-a", ResolvBackup, target);
         try { File.Delete(ResolvBackup); } catch { }
     }

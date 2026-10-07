@@ -10,7 +10,7 @@ namespace Gsa4Linux.Daemon;
 /// Daemon side of token acquisition. Listens on a unix socket; the session agent connects and
 /// serves Entra tokens from himmelblau's broker. Results are cached until shortly before expiry.
 /// </summary>
-public sealed class TokenBroker(ILog log)
+public sealed class TokenBroker(ILog log, uint ownerUid)
 {
     public const string SocketPath = "/run/gsa4linux/token.sock";
 
@@ -33,7 +33,7 @@ public sealed class TokenBroker(ILog log)
         var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixEndPoint(SocketPath));
         listener.Listen(4);
-        Run("chmod", "666", SocketPath);
+        NetCfg.SecureSocket(SocketPath, ownerUid);
         _ = Task.Run(() => AcceptLoop(listener, ct), ct);
         await Task.CompletedTask;
     }
@@ -48,9 +48,19 @@ public sealed class TokenBroker(ILog log)
             catch { continue; }
 
             (int pid, uint uid, _) = Native.GetPeerCred(sock);
-            if (uid < 1000)
+            // Authenticate the peer: must be the configured session owner (GSA-001). With no owner
+            // configured, fall back to the old uid>=1000 gate (socket is 0666 in that mode).
+            bool allowed = ownerUid != 0 ? uid == ownerUid : uid >= 1000;
+            if (!allowed)
             {
                 log.Warn($"rejecting token agent from uid {uid}");
+                sock.Dispose();
+                continue;
+            }
+            // Single agent only: do not let a later connection displace the live one (GSA-001).
+            if (_agent != null)
+            {
+                log.Warn($"rejecting second token agent from uid {uid} (one already connected)");
                 sock.Dispose();
                 continue;
             }

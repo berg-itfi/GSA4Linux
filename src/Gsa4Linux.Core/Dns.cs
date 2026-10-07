@@ -23,6 +23,8 @@ public sealed class DnsStub(IDnsHost host, ILog log)
     private readonly List<string> _upstreams = NetCfg.ReadUpstreams();
     private readonly Dictionary<string, uint> _magicByHost = new();
     private readonly Dictionary<uint, string> _hostByMagic = new();
+    private readonly Dictionary<uint, long> _lruTick = new();  // magic IP -> last-use tick, for LRU eviction (GSA-008)
+    private long _tick;
     private long _next = 1;
     private readonly object _lock = new();
 
@@ -31,36 +33,46 @@ public sealed class DnsStub(IDnsHost host, ILog log)
 
     public string? HostForMagic(uint ip)
     {
-        lock (_lock) return _hostByMagic.TryGetValue(ip, out var h) ? h : null;
+        lock (_lock)
+        {
+            if (!_hostByMagic.TryGetValue(ip, out var h)) return null;
+            _lruTick[ip] = ++_tick;   // mark recently used so active flows aren't evicted (GSA-008)
+            return h;
+        }
     }
 
     private uint MagicFor(string hostName)
     {
         lock (_lock)
         {
-            if (_magicByHost.TryGetValue(hostName, out var existing)) return existing;
+            if (_magicByHost.TryGetValue(hostName, out var existing)) { _lruTick[existing] = ++_tick; return existing; }
             var net = host.Policy!.MagicNet;
             var reserved = new HashSet<uint>();
             foreach (var d in host.Policy.PrivateDns)
-                if (!string.IsNullOrEmpty(d.DnsServerAddress)) reserved.Add(Packet.Aton(d.DnsServerAddress));
+                if (!string.IsNullOrEmpty(d.DnsServerAddress))
+                    try { reserved.Add(Packet.Aton(d.DnsServerAddress)); } catch { } // ignore malformed policy address (GSA-006)
             long size = net.Size;
+            long span = Math.Max(1, size - 2);  // usable host count; guard divide-by-zero on tiny subnets (GSA-006)
             uint cand = 0;
             bool found = false;
             for (long i = 0; i < size; i++)
             {
                 cand = (uint)(net.NetworkAddress + _next);
-                _next = (_next % (size - 2)) + 1;
+                _next = (_next % span) + 1;
                 if (!reserved.Contains(cand) && !_hostByMagic.ContainsKey(cand)) { found = true; break; }
             }
             if (!found)
             {
-                var old = _hostByMagic.Keys.First();
+                // Evict the least-recently-used mapping rather than an arbitrary one (GSA-008).
+                var old = _lruTick.OrderBy(kv => kv.Value).First().Key;
                 _magicByHost.Remove(_hostByMagic[old]);
                 _hostByMagic.Remove(old);
+                _lruTick.Remove(old);
                 cand = old;
             }
             _magicByHost[hostName] = cand;
             _hostByMagic[cand] = hostName;
+            _lruTick[cand] = ++_tick;
             return cand;
         }
     }
@@ -116,13 +128,15 @@ public sealed class DnsStub(IDnsHost host, ILog log)
             return o;
         }
         for (int i = 0; i < qd; i++) { off = SkipName(off) + 4; }
-        for (int i = 0; i < an && off + 10 <= msg.Length; i++)
+        for (int i = 0; i < an; i++)
         {
             off = SkipName(off);
+            if (off + 10 > msg.Length) break;      // bounds re-checked AFTER SkipName advances (GSA-007)
             ushort type = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(off));
             int rdlen = BinaryPrimitives.ReadUInt16BigEndian(msg.AsSpan(off + 8));
             int rdata = off + 10;
-            if (type == A && rdlen == 4 && rdata + 4 <= msg.Length)
+            if (rdata + rdlen > msg.Length) break;  // rdata must fit
+            if (type == A && rdlen == 4)
                 return BinaryPrimitives.ReadUInt32BigEndian(msg.AsSpan(rdata, 4));
             off = rdata + rdlen;
         }
@@ -288,7 +302,7 @@ public sealed class DnsStub(IDnsHost host, ILog log)
     {
         int off = 12;
         while (off < msg.Length && msg[off] != 0) off += msg[off] + 1;
-        return off + 1 + 4; // null label + qtype + qclass
+        return Math.Min(off + 1 + 4, msg.Length); // null label + qtype + qclass, clamped (GSA-007)
     }
 
     private static byte[] EncodeName(string name)

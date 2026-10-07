@@ -37,10 +37,16 @@ public sealed class Packet
     /// <summary>Parse an IPv4 TCP/UDP first-fragment packet, else null.</summary>
     public static Packet? Parse(byte[] raw)
     {
-        if (raw.Length < 28 || (raw[0] >> 4) != 4) return null;
+        if (raw.Length < 20 || (raw[0] >> 4) != 4) return null;
         if (raw[9] != TCP && raw[9] != UDP) return null;
+        int ihl = (raw[0] & 0x0f) * 4;
+        if (ihl < 20 || raw.Length < ihl) return null;                 // valid IHL and full IP header
         ushort fragOff = BinaryPrimitives.ReadUInt16BigEndian(raw.AsSpan(6, 2));
-        if ((fragOff & 0x1fff) != 0) return null; // non-first fragment
+        if ((fragOff & 0x1fff) != 0) return null;                      // non-first fragment
+        // Ensure the full L4 header the parser/userspace-TCP will read is present:
+        // TCP needs 20 bytes (seq/ack/flags/window), UDP needs 8.
+        int l4Min = raw[9] == TCP ? 20 : 8;
+        if (raw.Length < ihl + l4Min) return null;
         return new Packet(raw);
     }
 

@@ -78,9 +78,15 @@ public sealed class Policy
                 if (c.TryGetProperty("edgesSettings", out var es) && es.TryGetProperty(key, out var arr) &&
                     arr.ValueKind == JsonValueKind.Array)
                     foreach (var e in arr.EnumerateArray())
-                        list.Add(new Edge(e.GetProperty("edgeAddress").GetString()!,
-                                          int.Parse(ValStr(e.GetProperty("edgePort"))),
+                    {
+                        var addr = e.GetProperty("edgeAddress").GetString()!;
+                        // GSA-005: only tunnel to Microsoft's GSA edges. Drop any edge the policy
+                        // names outside this suffix so a tampered/MITM'd policy cannot redirect the
+                        // real tunnel token to an attacker host.
+                        if (!IsTrustedEdge(addr)) continue;
+                        list.Add(new Edge(addr, int.Parse(ValStr(e.GetProperty("edgePort"))),
                                           !e.TryGetProperty("isSecure", out var s) || BoolOf(s)));
+                    }
                 return list;
             }
             var id = c.GetProperty("id").GetString()!;
@@ -157,6 +163,13 @@ public sealed class Policy
                 });
         PrivateDns = pdns;
     }
+
+    public const string EdgeSuffix = ".globalsecureaccess.microsoft.com";
+
+    /// <summary>GSA-005: an edge host is trusted only if it is under the GSA edge domain.</summary>
+    public static bool IsTrustedEdge(string host) =>
+        host.EndsWith(EdgeSuffix, StringComparison.OrdinalIgnoreCase) &&
+        host.Length > EdgeSuffix.Length;
 
     private static string ValStr(JsonElement e) => e.ValueKind == JsonValueKind.String ? e.GetString()! : e.GetRawText();
     private static uint ParseU(JsonElement e) => uint.Parse(ValStr(e));

@@ -28,12 +28,24 @@ public sealed class Gsa4Daemon : IDnsHost
     public bool Enabled => _enabled;
     public bool Debug { get; private set; }
 
+    // The session user allowed to talk to the local sockets. 0 = unset (compat/world fallback).
+    public uint OwnerUid { get; }
+
+    // Flow admission caps (GSA-004): bound fds/tasks/memory against SYN flooding over the TUN.
+    public const int MaxFlows = 1024;
+    public const int MaxFlowsPerSource = 128;
+
     public Gsa4Daemon(string[] channelsWanted, bool debug, ILog log)
     {
         _channelsWanted = channelsWanted.Select(c => c.ToLowerInvariant()).ToArray();
         Debug = debug;
         _log = log;
-        Tokens = new TokenBroker(log);
+        OwnerUid = uint.TryParse(Environment.GetEnvironmentVariable("GSA4LINUX_UID"), out var u) ? u : 0;
+        if (OwnerUid == 0)
+            log.Warn("GSA4LINUX_UID not set: local sockets fall back to world-accessible mode (set it to the session user's uid to lock them down)");
+        else
+            log.Info($"local sockets restricted to uid {OwnerUid}");
+        Tokens = new TokenBroker(log, OwnerUid);
     }
 
     // --- IDnsHost ---
@@ -227,6 +239,15 @@ public sealed class Gsa4Daemon : IDnsHost
         if (_flows.TryGetValue(key, out var existing)) { await existing.OnPacketAsync(raw); return; }
         if (pkt.Proto == Packet.TCP && (pkt.Flags & Packet.SYN) == 0) return; // not a connection start
 
+        // Flow admission control (GSA-004): cap total and per-source live flows so a local SYN flood
+        // (e.g. source-port sweeping a magic IP) cannot exhaust fds/tasks/memory of the root daemon.
+        if (_flows.Count >= MaxFlows ||
+            _flows.Keys.Count(k => k.Src == pkt.Src) >= MaxFlowsPerSource)
+        {
+            if (pkt.Proto == Packet.TCP) WriteTun(pkt.BuildTcpReset());
+            return;
+        }
+
         string host = _dns?.HostForMagic(pkt.Dst) ?? "";
         if (Policy == null) return;
 
@@ -262,7 +283,7 @@ public sealed class Gsa4Daemon : IDnsHost
     // --- control socket (tray applet talks to this) ---
     private async Task ControlSocketLoop(CancellationToken ct)
     {
-        var control = new ControlServer(this, _log);
+        var control = new ControlServer(this, _log, OwnerUid);
         await control.RunAsync(ct);
     }
 }

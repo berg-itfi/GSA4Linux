@@ -14,8 +14,18 @@ namespace Gsa4Linux.Core;
 public sealed class UserTcpConnection
 {
     private const int Mss = 1360;              // fits our 1400-byte TUN MTU
-    private const int RcvWnd = 64240;
+    private const int RcvBufMax = 256 * 1024;  // cap on app->real data buffered in userspace (GSA-003)
     private const int SndBufMax = 256 * 1024;
+
+    // Bytes accepted from the app but not yet drained to the real socket. The advertised receive
+    // window is RcvBufMax minus this, so the sender is throttled when the real server is slow and
+    // the buffer can never grow without bound (GSA-003).
+    private long _appQueuedBytes;
+    private int CurrentRcvWnd()
+    {
+        long free = RcvBufMax - Interlocked.Read(ref _appQueuedBytes);
+        return (int)Math.Clamp(free, 0, 65535);
+    }
 
     // addressing: our side is the magic IP:port the app dialed; peer is the app
     private readonly uint _localIp, _remoteIp;
@@ -104,9 +114,13 @@ public sealed class UserTcpConnection
             // in-order payload from app -> real server
             if (payloadLen > 0 && _state is St.Established or St.FinWait1 or St.FinWait2)
             {
-                if (seq == _rcvNxt)
+                // Accept in-order data only while there is receive-buffer space. If the buffer is
+                // full we drop (don't advance rcvNxt) and the ACK below advertises a 0/low window,
+                // so the sender stops until the real socket drains (GSA-003 backpressure).
+                if (seq == _rcvNxt && Interlocked.Read(ref _appQueuedBytes) + payloadLen <= RcvBufMax)
                 {
                     _appToReal.Writer.TryWrite(p.Raw.AsSpan(payloadOff, payloadLen).ToArray());
+                    Interlocked.Add(ref _appQueuedBytes, payloadLen);
                     _rcvNxt += (uint)payloadLen;
                 }
                 SendAck(); // ACK in-order progress, or dup-ACK to prompt a retransmit
@@ -151,6 +165,9 @@ public sealed class UserTcpConnection
                 int off = 0;
                 while (off < chunk.Length)
                     off += await _real.SendAsync(chunk.AsMemory(off), SocketFlags.None, _cts.Token);
+                // Freed buffer space: reopen the receive window and nudge the sender with an ACK.
+                Interlocked.Add(ref _appQueuedBytes, -chunk.Length);
+                lock (_lk) { if (_state is St.Established or St.CloseWait) SendAck(); }
             }
         }
         catch { }
@@ -264,7 +281,7 @@ public sealed class UserTcpConnection
 
     private void Emit(uint seq, byte flags, ReadOnlySpan<byte> payload, ReadOnlySpan<byte> options)
         => _toTun(Tcp.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags,
-                            (ushort)RcvWnd, payload, options));
+                            (ushort)CurrentRcvWnd(), payload, options));
 
     private void Abort(string why)
     {

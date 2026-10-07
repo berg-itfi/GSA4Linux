@@ -1,0 +1,6 @@
+<Project>
+  <!-- GSA-011: pin transitive dependencies for reproducible restore. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>
