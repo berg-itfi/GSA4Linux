@@ -49,7 +49,7 @@ himmelblau's broker for channel/app tokens, and passes them to the daemon over a
 | Project | Output | Runs as | Role |
 |---|---|---|---|
 | `Gsa4Linux.Core`  | library        | —            | proto (built from `proto/ztna_v2.proto`), policy, packet, DNS stub, netcfg, userspace TCP (`Tcp.cs`) |
-| `Gsa4Linux.Daemon`| `gsa4linuxd`   | root (system)| TUN, routing, DNS stub, control channels, flow bridging, control socket |
+| `Gsa4Linux.Daemon`| `gsa4linuxd`   | `gsa4linux` (system, non-root) | TUN, routing, DNS stub, control channels, flow bridging, control socket |
 | `Gsa4Linux.Agent` | `gsa4linux-agent` | you (session) | serves Entra tokens from the himmelblau broker |
 | `Gsa4Linux.Tray`  | `gsa4linux-tray`  | you (session) | StatusNotifierItem tray: Enable/Disable, Debug, status |
 
@@ -68,6 +68,9 @@ Requires the .NET 10 runtime at run time (framework-dependent publish).
 ## Install
 
 ```bash
+# dedicated non-root service account for the daemon
+id gsa4linux >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin gsa4linux
+
 sudo mkdir -p /opt/gsa4linux-dotnet
 sudo cp -r publish/* /opt/gsa4linux-dotnet/
 
@@ -132,11 +135,19 @@ was run and the findings remediated. Current posture:
 * **Edge allowlist.** The daemon only connects to edges under
   `*.globalsecureaccess.microsoft.com`, so a tampered policy cannot redirect the tunnel token to an
   attacker host. (TLS to the edge/APS uses the system CA store; certificates are **not** pinned.)
+* **Non-root daemon.** `gsa4linuxd` runs as a dedicated system user (`gsa4linux`), not root, with
+  only `CAP_NET_ADMIN` (TUN, routing, net sysctl), `CAP_NET_BIND_SERVICE` (DNS stub on `:53`),
+  `CAP_CHOWN` (lock the sockets to the session user) and `CAP_DAC_OVERRIDE` (write
+  `/etc/resolv.conf`). `CapabilityBoundingSet` is restricted to those four, `NoNewPrivileges` is
+  set, and `ProtectSystem=strict` confines writes to `/etc` and `/run`.
 * **Hardening.** Policy-input guards (malformed addresses, tiny magic subnets), tightened
   packet/DNS parser bounds, LRU magic-IP eviction, a resolv.conf symlink guard (writes refuse to
-  leave `/etc`/`/run`), committed NuGet lock files, and systemd sandboxing.
-* **Known residuals.** The daemon still runs as **root** (full non-root with `CAP_NET_ADMIN` only is
-  deferred), and edge certificates are not pinned (allowlist only). Fine for a single-user
+  leave `/etc`/`/run`), committed NuGet lock files, device allow-list for `/dev/net/tun`, and
+  systemd sandboxing (`RestrictAddressFamilies`, `RestrictSUIDSGID`, `LockPersonality`, …).
+* **Known residuals.** `CAP_DAC_OVERRIDE` remains (needed to rewrite `/etc/resolv.conf`; its write
+  reach is confined by `ProtectSystem=strict`) and could be shed later with a group-writable
+  resolv.conf. Edge certificates are not pinned (hostname allowlist only). `CAP_NET_ADMIN` is
+  inherently powerful (the daemon reconfigures host networking by design). Fine for a single-user
   workstation; review before multi-user or higher-assurance use.
 
 Audit artifacts (not committed) live under `~/security-audit-skill/GSA4Linux/run-1/`

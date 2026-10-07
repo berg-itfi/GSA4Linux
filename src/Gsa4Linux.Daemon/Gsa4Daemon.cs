@@ -24,6 +24,7 @@ public sealed class Gsa4Daemon : IDnsHost
     private CancellationTokenSource? _session;   // per enabled-session
     private volatile bool _enabled = true;
     private string? _routeCidr;
+    private int _policyBackoff = 3;   // seconds; grows on repeated policy-fetch failure, resets on success
 
     public bool Enabled => _enabled;
     public bool Debug { get; private set; }
@@ -159,10 +160,12 @@ public sealed class Gsa4Daemon : IDnsHost
     {
         while (!ct.IsCancellationRequested)
         {
+            bool ok = false;
             try
             {
                 var token = await Tokens.GetAsync(TokenContext.Bootstrap);
                 var pol = await Policy.FetchAsync(token, ct);
+                ok = true;
                 if (Policy == null || pol.SettingsVersion != Policy.SettingsVersion)
                 {
                     _log.Info($"policy {pol.SettingsVersion}");
@@ -175,7 +178,11 @@ public sealed class Gsa4Daemon : IDnsHost
                 }
             }
             catch (Exception e) { _log.Warn($"policy fetch failed: {e.Message}"); }
-            await Task.Delay(TimeSpan.FromSeconds(Policy?.PollInterval ?? 60), ct);
+            // On success, poll at the policy's interval. On failure (e.g. a transient DNS/broker
+            // hiccup during enable), retry quickly with backoff so startup isn't stalled ~a minute.
+            int delay = ok ? (Policy?.PollInterval ?? 60) : Math.Min(_policyBackoff, 30);
+            if (!ok) _policyBackoff = Math.Min(_policyBackoff * 2, 30); else _policyBackoff = 3;
+            await Task.Delay(TimeSpan.FromSeconds(delay), ct);
         }
     }
 

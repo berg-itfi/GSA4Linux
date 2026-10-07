@@ -9,6 +9,7 @@ Type=simple
 ExecStart=/opt/gsa4linux-dotnet/gsa4linuxd
 Environment=GSA4LINUX_CHANNELS=Private,M365
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=HOME=/run/gsa4linux
 # GSA-001/GSA-002: the session user allowed to drive the local token/control sockets.
 # Set this to the primary interactive user's uid so the sockets are locked to them (0600 + chown).
 Environment=GSA4LINUX_UID=674891046
@@ -16,13 +17,24 @@ Restart=on-failure
 RestartSec=5
 RuntimeDirectory=gsa4linux
 RuntimeDirectoryMode=0755
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# GSA-010: run as a dedicated non-root user with only the capabilities actually needed:
+#   CAP_NET_ADMIN        TUN device, ip link/addr/route, net sysctl (rp_filter)
+#   CAP_NET_BIND_SERVICE DNS stub binds 127.0.0.153:53 (privileged port)
+#   CAP_CHOWN            chown the token/control sockets to the session user
+#   CAP_DAC_OVERRIDE     write /etc/resolv.conf (writes are still confined by ProtectSystem below)
+User=gsa4linux
+Group=gsa4linux
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_CHOWN CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_CHOWN CAP_DAC_OVERRIDE
 NoNewPrivileges=true
+
+# Sandboxing (compatible with the TUN/route/DNS work the daemon does).
+DeviceAllow=/dev/net/tun rw
 ProtectHome=read-only
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/etc /run
-# GSA-010: modest additional sandboxing (kept compatible with the TUN/route/DNS work the daemon does).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictSUIDSGID=true
 RestrictRealtime=true

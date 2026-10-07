@@ -43,8 +43,10 @@ public static class NetCfg
     {
         if (ownerUid != 0)
         {
-            Run("chown", $"{ownerUid}:{ownerUid}", path);
+            // chmod while we still own the file, then hand ownership to the session user. Doing it
+            // in this order means a non-root daemon needs only CAP_CHOWN, not CAP_FOWNER.
             Run("chmod", "600", path);
+            Run("chown", $"{ownerUid}:{ownerUid}", path);
         }
         else
         {
