@@ -220,9 +220,14 @@ Audit artifacts (not committed) live under `~/security-audit-skill/GSA4Linux/run
 * The TUN carries only the policy's acquisition subnet (6.6.0.0/16 by default); other traffic is
   untouched.
 
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Aki Berg (berg-it.fi).
+
 ## Legal
 
 Not affiliated with or endorsed by Microsoft. "Global Secure Access", "Entra" and "Microsoft" are
 trademarks of Microsoft. This is an independent, interoperable reimplementation of the client
 protocol for use by authorized users of their own organization's resources on a platform Microsoft
-does not provide a client for. Use in accordance with your organization's policies.
+does not provide a client for. Use in accordance with your organization's policies. The MIT license
+above covers this project's own source; it grants no rights in Microsoft's trademarks or services.
