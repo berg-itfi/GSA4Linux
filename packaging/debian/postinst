@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # dedicated non-root service account for the daemon
+        if ! id gsa4linux >/dev/null 2>&1; then
+            adduser --system --no-create-home --group --shell /usr/sbin/nologin gsa4linux \
+                || useradd --system --no-create-home --shell /usr/sbin/nologin gsa4linux
+        fi
+        chmod +x /opt/gsa4linux-dotnet/gsa4linuxd \
+                 /opt/gsa4linux-dotnet/gsa4linux-agent \
+                 /opt/gsa4linux-dotnet/gsa4linux-tray 2>/dev/null || true
+
+        # Lock the local sockets to the installing user when we can tell who that is
+        # (e.g. installed via `sudo apt install ./gsa4linux.deb`).
+        if [ -n "${SUDO_UID:-}" ] && printf '%s' "$SUDO_UID" | grep -qE '^[0-9]+$' && [ "$SUDO_UID" -ge 1000 ]; then
+            mkdir -p /etc/systemd/system/gsa4linuxd.service.d
+            printf '[Service]\nEnvironment=GSA4LINUX_UID=%s\n' "$SUDO_UID" \
+                > /etc/systemd/system/gsa4linuxd.service.d/10-uid.conf
+            echo "gsa4linux: local sockets locked to uid $SUDO_UID"
+        else
+            echo "gsa4linux: run 'sudo gsa4linux-set-user <username>' to lock the local sockets to"
+            echo "          your session user (otherwise they fall back to world-accessible)."
+        fi
+
+        systemctl daemon-reload || true
+        systemctl enable --now gsa4linuxd.service || true
+        systemctl --global enable gsa4linux-agent.service gsa4linux-tray.service || true
+        echo "gsa4linux: agent + tray enabled for all users (start on next login, or now with"
+        echo "          'systemctl --user start gsa4linux-agent.service gsa4linux-tray.service')."
+        ;;
+esac
+
+exit 0

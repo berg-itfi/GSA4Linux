@@ -11,3 +11,6 @@ publish-*/
 
 # OS
 .DS_Store
+
+# packaging output
+dist/

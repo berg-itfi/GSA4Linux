@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        systemctl --global disable gsa4linux-agent.service gsa4linux-tray.service || true
+        systemctl disable --now gsa4linuxd.service || true
+        ;;
+esac
+
+exit 0

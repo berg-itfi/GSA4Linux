@@ -10,9 +10,10 @@ ExecStart=/opt/gsa4linux-dotnet/gsa4linuxd
 Environment=GSA4LINUX_CHANNELS=Private,M365
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Environment=HOME=/run/gsa4linux
-# GSA-001/GSA-002: the session user allowed to drive the local token/control sockets.
-# Set this to the primary interactive user's uid so the sockets are locked to them (0600 + chown).
-Environment=GSA4LINUX_UID=674891046
+# GSA-001/GSA-002: the session user allowed to drive the local token/control sockets is set at
+# install time in a drop-in (/etc/systemd/system/gsa4linuxd.service.d/10-uid.conf) via
+# `gsa4linux-set-user <you>` or the installer, so this unit stays machine-independent. Without it
+# the daemon logs a warning and falls back to world-accessible sockets.
 Restart=on-failure
 RestartSec=5
 RuntimeDirectory=gsa4linux

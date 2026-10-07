@@ -67,20 +67,31 @@ Requires the .NET 10 runtime at run time (framework-dependent publish).
 
 ## Install
 
+### Debian package (recommended)
+
 ```bash
-# dedicated non-root service account for the daemon
-id gsa4linux >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin gsa4linux
+packaging/build-deb.sh                 # produces dist/gsa4linux_<version>_amd64.deb
+sudo apt install ./dist/gsa4linux_0.1.0_amd64.deb
+# then, in your session:
+systemctl --user start gsa4linux-agent.service gsa4linux-tray.service
+```
 
-sudo mkdir -p /opt/gsa4linux-dotnet
-sudo cp -r publish/* /opt/gsa4linux-dotnet/
+The package depends on `dotnet-runtime-10.0`, `himmelblau-broker`, `iproute2`, `adduser` and
+`python3` (and recommends `himmelblau`, `himmelblau-sso`). It creates the `gsa4linux` service user,
+installs the daemon to `/opt/gsa4linux-dotnet`, the user units to `/usr/lib/systemd/user`, the
+`gsa4linux-ila-status` and `gsa4linux-set-user` helpers to `/usr/bin`, and enables everything.
+Installed via `sudo apt install ./…deb`, it locks the sockets to your uid automatically; otherwise:
 
-sudo cp systemd/gsa4linuxd.service /etc/systemd/system/
-mkdir -p ~/.config/systemd/user
-cp systemd/gsa4linux-agent.service systemd/gsa4linux-tray.service ~/.config/systemd/user/
+```bash
+sudo gsa4linux-set-user "$USER"        # lock the token/control sockets to your session user
+```
 
-sudo systemctl daemon-reload && systemctl --user daemon-reload
-sudo systemctl enable --now gsa4linuxd.service
-systemctl --user enable --now gsa4linux-agent.service gsa4linux-tray.service
+### From source (manual)
+
+```bash
+for p in Daemon Agent Tray; do dotnet publish src/Gsa4Linux.$p/Gsa4Linux.$p.csproj -c Release -o publish; done
+sudo scripts/install.sh                # creates the user, installs units+binaries, locks to your uid
+systemctl --user start gsa4linux-agent.service gsa4linux-tray.service
 ```
 
 > **Important — set `GSA4LINUX_UID`.** The daemon locks its local sockets to one session user
@@ -109,6 +120,8 @@ printf '{"cmd":"disable"}\n' | nc -U /run/gsa4linux/control.sock
 printf '{"cmd":"enable"}\n'  | nc -U /run/gsa4linux/control.sock
 
 sudo journalctl -u gsa4linuxd -f
+
+gsa4linux-ila-status                   # Intelligent Local Access state (tunnels, ilaEnabled, onCorpNet)
 ```
 
 The control socket is `0600`, owned by `GSA4LINUX_UID` — only that user (and root) can read status

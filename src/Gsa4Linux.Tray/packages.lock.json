@@ -4,9 +4,9 @@
     "net10.0": {
       "Tmds.DBus": {
         "type": "Direct",
-        "requested": "[0.21.2, )",
-        "resolved": "0.21.2",
-        "contentHash": "KejVYde7VYeWsAj4aaELthlJyVzsbvG4rmHgaXuyPmv8QuN4SLYotKGYtYqWRG+zj9c24/VCYq+V67SRgasDYQ=="
+        "requested": "[0.95.1, )",
+        "resolved": "0.95.1",
+        "contentHash": "2mLo+choDFkVlpYN1dcAmFESclH/LoMGg4whvvV4RFM9xbBniRwqNb0/Fe3/z4RCzXSQi+Gb6SzM2c19WcoP3Q=="
       },
       "Google.Protobuf": {
         "type": "Transitive",

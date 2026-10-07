@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -f /etc/systemd/system/gsa4linuxd.service.d/10-uid.conf
+        rmdir /etc/systemd/system/gsa4linuxd.service.d 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        # The dedicated 'gsa4linux' system user is left in place intentionally.
+        ;;
+esac
+
+exit 0

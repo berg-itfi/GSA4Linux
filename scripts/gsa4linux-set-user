@@ -1,0 +1,18 @@
+#!/bin/sh
+# gsa4linux-set-user <username|uid> — lock the daemon's local sockets to one session user.
+# Run as root. Writes a systemd drop-in with GSA4LINUX_UID and restarts the daemon.
+set -e
+if [ -z "${1:-}" ]; then
+    echo "usage: sudo gsa4linux-set-user <username|uid>"
+    exit 2
+fi
+UID_VAL=$(id -u "$1" 2>/dev/null || echo "$1")
+case "$UID_VAL" in
+    '' | *[!0-9]*) echo "cannot resolve a uid for '$1'"; exit 1 ;;
+esac
+mkdir -p /etc/systemd/system/gsa4linuxd.service.d
+printf '[Service]\nEnvironment=GSA4LINUX_UID=%s\n' "$UID_VAL" \
+    > /etc/systemd/system/gsa4linuxd.service.d/10-uid.conf
+systemctl daemon-reload
+systemctl restart gsa4linuxd.service 2>/dev/null || true
+echo "gsa4linux: local sockets locked to uid $UID_VAL"

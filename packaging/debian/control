@@ -1,0 +1,19 @@
+Package: gsa4linux
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Aki Berg <aki.berg@berg-it.fi>
+Installed-Size: @SIZE@
+Depends: dotnet-runtime-10.0, himmelblau-broker, iproute2, adduser, python3
+Recommends: himmelblau, himmelblau-sso
+Homepage: https://github.com/berg-itfi/GSA4Linux
+Description: Unofficial Linux client for Microsoft Entra Global Secure Access
+ Connects an Entra-joined Linux machine to Microsoft Global Secure Access
+ (Private Access and the M365 traffic-forwarding profile) using the
+ microsoft.ztna.v2 tunnel protocol. Authentication is delegated to the
+ himmelblau identity broker, which holds the device's Entra PRT.
+ .
+ Installs a non-root system daemon (gsa4linuxd) plus a per-user session token
+ agent and a StatusNotifierItem tray applet. Intelligent Local Access is driven
+ entirely by the tenant policy GSA pushes.

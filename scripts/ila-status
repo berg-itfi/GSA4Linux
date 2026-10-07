@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# gsa4linux-ila-status — show Intelligent Local Access (ILA) state reported by the daemon.
+# ILA is entirely driven by what GSA pushes in the policy; this just reflects it.
+set -euo pipefail
+SOCK=/run/gsa4linux/control.sock
+if [ ! -S "$SOCK" ]; then
+    echo "control socket $SOCK not found — is gsa4linuxd running? (systemctl status gsa4linuxd)"
+    exit 1
+fi
+
+python3 - "$SOCK" <<'PY'
+import socket, sys, json
+s = socket.socket(socket.AF_UNIX)
+try:
+    s.connect(sys.argv[1])
+    s.sendall(b'{"cmd":"status"}\n')
+    d = json.loads(s.recv(16384))
+except Exception as e:
+    print(f"could not query the daemon: {e} (socket is locked to the session user)")
+    sys.exit(1)
+print(f"daemon enabled   : {d.get('enabled')}")
+print(f"tunnels          : {d.get('tunnels')}")
+print(f"ILA enabled      : {d.get('ilaEnabled')}   (tenant IsPrivateNetworkEnabled — pushed by GSA)")
+corp = d.get('onCorpNet') or []
+print(f"on corp network  : {', '.join(corp) if corp else '(none / remote — Private Access tunnels)'}")
+if not d.get('ilaEnabled'):
+    print("\nILA is off in the tenant policy, so nothing is bypassed locally. Enable Private")
+    print("networks in Entra (Global Secure Access > Connect > Private networks) to turn it on.")
+PY
+
+echo
+echo "recent ILA log lines:"
+journalctl -u gsa4linuxd --no-pager -n 300 2>/dev/null | grep -iE 'ILA|corp-net|private network' | tail -6 \
+    || echo "  (none; run with sudo to read the system journal)"
