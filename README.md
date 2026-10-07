@@ -9,8 +9,10 @@ desktop Linux. GSA4Linux speaks the same tunnel protocol the macOS client uses
 resources. Authentication is delegated to [himmelblau](https://github.com/himmelblau-idm/himmelblau),
 which holds the device's Entra PRT.
 
-> Status: working. On the reference machine the control channel comes up against the tenant's
-> edge and TCP flows to internal resources complete, including TLS/HTTP2 and SMB.
+> Status: working and security-hardened. On the reference machine both the Private and M365
+> channels come up against the tenant's edge and TCP flows to internal resources complete,
+> including TLS/HTTP2 and SMB. A source-first security audit has been run and its findings
+> remediated (see **Security** below).
 
 ## How it works
 
@@ -46,7 +48,7 @@ himmelblau's broker for channel/app tokens, and passes them to the daemon over a
 
 | Project | Output | Runs as | Role |
 |---|---|---|---|
-| `Gsa4Linux.Core`  | library        | —            | proto (built from `proto/ztna_v2.proto`), policy, packet, DNS, netcfg |
+| `Gsa4Linux.Core`  | library        | —            | proto (built from `proto/ztna_v2.proto`), policy, packet, DNS stub, netcfg, userspace TCP (`Tcp.cs`) |
 | `Gsa4Linux.Daemon`| `gsa4linuxd`   | root (system)| TUN, routing, DNS stub, control channels, flow bridging, control socket |
 | `Gsa4Linux.Agent` | `gsa4linux-agent` | you (session) | serves Entra tokens from the himmelblau broker |
 | `Gsa4Linux.Tray`  | `gsa4linux-tray`  | you (session) | StatusNotifierItem tray: Enable/Disable, Debug, status |
@@ -78,6 +80,19 @@ sudo systemctl enable --now gsa4linuxd.service
 systemctl --user enable --now gsa4linux-agent.service gsa4linux-tray.service
 ```
 
+> **Important — set `GSA4LINUX_UID`.** The daemon locks its local sockets to one session user
+> (`chmod 0600` + `chown`). The shipped `gsa4linuxd.service` sets `Environment=GSA4LINUX_UID=` to
+> the reference machine's uid; change it to **your** uid (`id -u`) or the agent/tray will be
+> rejected:
+>
+> ```bash
+> sudo systemctl edit gsa4linuxd    # [Service]\nEnvironment=GSA4LINUX_UID=$(id -u)
+> sudo systemctl restart gsa4linuxd
+> ```
+>
+> If `GSA4LINUX_UID` is unset the daemon logs a warning and falls back to world-accessible sockets
+> (`0666`, any uid≥1000) — do not run that way on a shared host.
+
 ## Operate
 
 The tray applet (Enable / Disable / Debug) is the easy path. From the shell:
@@ -91,8 +106,41 @@ printf '{"cmd":"enable"}\n'  | nc -U /run/gsa4linux/control.sock
 sudo journalctl -u gsa4linuxd -f
 ```
 
-`GSA4LINUX_CHANNELS` (default `Private`) selects which policy channels to bring up
-(`Private`, `M365`, or both comma-separated).
+The control socket is `0600`, owned by `GSA4LINUX_UID` — only that user (and root) can read status
+or pause/resume, so `nc -U` works as the owner and is refused for anyone else.
+
+### Environment
+
+| Variable | Where | Default | Meaning |
+|---|---|---|---|
+| `GSA4LINUX_UID` | daemon unit | unset → insecure fallback | session user allowed to drive the token/control sockets (sockets are `0600` + chowned to it) |
+| `GSA4LINUX_CHANNELS` | daemon unit | `Private` (shipped unit sets `Private,M365`) | which policy channels to bring up (`Private`, `M365`, or both, comma-separated) |
+| `GSA4LINUX_DEBUG` | daemon unit | off | verbose logging (also toggleable live via the tray / control socket) |
+
+## Security
+
+A source-first security audit (Cloudflare `security-audit` skill: independent hunters + verification)
+was run and the findings remediated. Current posture:
+
+* **Local sockets are owner-locked.** `token.sock` and `control.sock` are `0600` and chowned to
+  `GSA4LINUX_UID`; the daemon additionally checks the peer uid equals that owner. The token socket
+  accepts a single agent and will not let a later connection displace it.
+* **Userspace-TCP backpressure.** The bypass stack bounds its receive buffer and advertises a real
+  window (free space), so a slow remote cannot grow the daemon's heap without bound.
+* **Flow admission caps.** At most 1024 concurrent flows (128 per source) to bound fds/tasks/memory
+  against SYN flooding over the TUN.
+* **Edge allowlist.** The daemon only connects to edges under
+  `*.globalsecureaccess.microsoft.com`, so a tampered policy cannot redirect the tunnel token to an
+  attacker host. (TLS to the edge/APS uses the system CA store; certificates are **not** pinned.)
+* **Hardening.** Policy-input guards (malformed addresses, tiny magic subnets), tightened
+  packet/DNS parser bounds, LRU magic-IP eviction, a resolv.conf symlink guard (writes refuse to
+  leave `/etc`/`/run`), committed NuGet lock files, and systemd sandboxing.
+* **Known residuals.** The daemon still runs as **root** (full non-root with `CAP_NET_ADMIN` only is
+  deferred), and edge certificates are not pinned (allowlist only). Fine for a single-user
+  workstation; review before multi-user or higher-assurance use.
+
+Audit artifacts (not committed) live under `~/security-audit-skill/GSA4Linux/run-1/`
+(`REPORT.md`, `findings.json`, `REMEDIATION.md`).
 
 ## Caveats
 
@@ -107,8 +155,15 @@ sudo journalctl -u gsa4linuxd -f
     with backoff, fixed window, no SACK/window-scaling) — fine for TLS/IMAP/HTTP, not a general
     TCP. Connections to literal M365 IPs with no DNS lookup are still not steered, and UDP bypass
     on a magic IP does not arise (bypassed UDP endpoints in policy are IP-literal).
-* Rules whose `appAuthorizationTokenContext` requires MFA via Conditional Access can't be
-  satisfied by the silent broker; the daemon falls through to the next matching rule.
+* **Per-app Conditional Access is enforced, not bypassed.** The most-specific matching rule is
+  authoritative; the daemon does **not** fall through to a broader rule/app when a per-app token
+  can't be obtained. If the silent broker needs a step-up, the client triggers an interactive
+  acquisition — himmelblau's **PIN prompt is the MFA factor** — and caches the result, so the next
+  attempt to that resource succeeds. If the policy requires something the device can't present
+  (e.g. **AADSTS530003 — "device must be compliant/managed"**: himmelblau joins the device to Entra
+  but does not make it Intune-compliant, and Debian isn't an Intune-supported Linux), the flow
+  fails fast and that resource needs a Conditional Access change on the Entra side (e.g. accept MFA
+  for Linux, scoped to a Linux group).
 * While enabled, system DNS is pointed at the local stub (127.0.0.153). The previous
   `/etc/resolv.conf` is saved to `/run/gsa4linux/resolv.conf.pre` and restored on disable/stop.
 * The TUN carries only the policy's acquisition subnet (6.6.0.0/16 by default); other traffic is
