@@ -23,9 +23,12 @@ public class StatusNotifierItemProperties
     public string Status = "Active";          // Active | Passive | NeedsAttention
     public int WindowId = 0;
     public string IconName = "network-vpn-symbolic";
+    // Rendered status badge (a(iiay): width, height, ARGB32 big-endian) so the colour reads the
+    // same in every theme — green=connected, amber=connecting, grey=disabled, red=daemon down.
+    public (int, int, byte[])[] IconPixmap = System.Array.Empty<(int, int, byte[])>();
     public string OverlayIconName = "";
     public string AttentionIconName = "";
-    public string ToolTipTitle = "";           // not standard but harmless; real tooltip via ToolTip
+    public (string, (int, int, byte[])[], string, string) ToolTip = ("", System.Array.Empty<(int, int, byte[])>(), "Global Secure Access", "");
     public bool ItemIsMenu = true;
     public ObjectPath Menu = new("/MenuBar");
 }

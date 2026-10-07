@@ -91,6 +91,8 @@ public sealed class ControlServer(Gsa4Daemon daemon, ILog log, uint ownerUid)
         if (daemon.Policy != null)
             foreach (var ch in daemon.Policy.Channels.Values)
                 tunnels[ch.Name] = ids.Contains(ch.Id);
+        var corpnet = new JsonArray();
+        foreach (var n in daemon.ConnectedPrivateNetworks) corpnet.Add(n.Name);
         return new JsonObject
         {
             ["enabled"] = daemon.Enabled,
@@ -98,6 +100,8 @@ public sealed class ControlServer(Gsa4Daemon daemon, ILog log, uint ownerUid)
             ["policyVersion"] = daemon.Policy?.SettingsVersion,
             ["tenant"] = daemon.Policy?.TenantId,
             ["tunnels"] = tunnels,
+            ["ilaEnabled"] = daemon.Policy?.PrivateNetworkEnabled ?? false,
+            ["onCorpNet"] = corpnet,
         };
     }
 }

@@ -49,6 +49,9 @@ public sealed class Gsa4Daemon : IDnsHost
         Tokens = new TokenBroker(log, OwnerUid);
     }
 
+    private volatile IReadOnlyList<PrivateNetwork> _connectedNetworks = [];
+    public IReadOnlyList<PrivateNetwork> ConnectedPrivateNetworks => _connectedNetworks;
+
     // --- IDnsHost ---
     public ISet<string> ActiveChannelIds()
     {
@@ -99,6 +102,7 @@ public sealed class Gsa4Daemon : IDnsHost
         StartTunReader(ct);
         _ = Task.Run(() => PolicyLoop(ct), ct);
         _ = Task.Run(() => ControlSocketLoop(ct), ct);
+        _ = Task.Run(() => LocalAccessLoop(ct), ct);
 
         if (_enabled) await EnableAsync();
 
@@ -169,6 +173,8 @@ public sealed class Gsa4Daemon : IDnsHost
                 if (Policy == null || pol.SettingsVersion != Policy.SettingsVersion)
                 {
                     _log.Info($"policy {pol.SettingsVersion}");
+                    if (pol.PrivateNetworkEnabled)
+                        _log.Info($"ILA enabled: {pol.PrivateNetworks.Count} private network(s); raw={pol.RawPrivateNetworksJson ?? "(none in policy)"}");
                     Policy = pol;
                     if (_enabled)
                     {
@@ -183,6 +189,41 @@ public sealed class Gsa4Daemon : IDnsHost
             int delay = ok ? (Policy?.PollInterval ?? 60) : Math.Min(_policyBackoff, 30);
             if (!ok) _policyBackoff = Math.Min(_policyBackoff * 2, 30); else _policyBackoff = 3;
             await Task.Delay(TimeSpan.FromSeconds(delay), ct);
+        }
+    }
+
+    /// <summary>
+    /// Intelligent Local Access: periodically DNS-probe each private network (resolve its FQDN
+    /// against its DNS server; a match inside the corpnet range means we're physically on that
+    /// network). Connected networks are exposed to the DNS stub, which then resolves their names
+    /// directly (local bypass) instead of handing out a magic IP. Inert unless the tenant has
+    /// enabled ILA (policy IsPrivateNetworkEnabled) — nothing happens off-corpnet.
+    /// </summary>
+    private async Task LocalAccessLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var pol = Policy;
+            int interval = pol?.LocalDetectionIntervalMs ?? 120000;
+            try
+            {
+                if (_enabled && pol is { PrivateNetworkEnabled: true } && pol.PrivateNetworks.Count > 0 && _dns != null)
+                {
+                    var connected = new List<PrivateNetwork>();
+                    foreach (var net in pol.PrivateNetworks)
+                        foreach (var server in net.DnsServers)
+                        {
+                            var ip = await _dns.ResolveAtAsync(net.Fqdn, server, ct);
+                            if (ip is { } v && net.Matches(v)) { connected.Add(net); break; }
+                        }
+                    if (!_connectedNetworks.Select(n => n.Id).ToHashSet().SetEquals(connected.Select(n => n.Id)))
+                        _log.Info($"ILA corp-net presence: {(connected.Count == 0 ? "none (remote)" : string.Join(", ", connected.Select(n => n.Name)))}");
+                    _connectedNetworks = connected;
+                }
+                else if (_connectedNetworks.Count > 0) _connectedNetworks = [];
+            }
+            catch (Exception e) { _log.Debug($"ILA probe: {e.Message}"); }
+            await Task.Delay(interval, ct);
         }
     }
 

@@ -8,6 +8,8 @@ public interface IDnsHost
 {
     Policy? Policy { get; }
     ISet<string> ActiveChannelIds();
+    /// <summary>ILA private networks currently detected as directly reachable (corp-net); empty otherwise.</summary>
+    IReadOnlyList<PrivateNetwork> ConnectedPrivateNetworks { get; }
 }
 
 /// <summary>
@@ -98,16 +100,42 @@ public sealed class DnsStub(IDnsHost host, ILog log)
     /// magic IP is never returned). Used by the daemon's bypass path to reach the real server.</summary>
     public async Task<uint?> ResolveRealIpAsync(string host, CancellationToken ct = default)
     {
+        try
+        {
+            var resp = await UpstreamAsync(BuildAQuery(host), ct);
+            return resp == null ? null : FirstAAnswer(resp);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Resolve an A record against one specific DNS server (used by the ILA corp-net probe).</summary>
+    public async Task<uint?> ResolveAtAsync(string host, string server, CancellationToken ct = default)
+    {
+        try
+        {
+            var resp = await udp_query_at(server, BuildAQuery(host), ct);
+            return resp == null ? null : FirstAAnswer(resp);
+        }
+        catch { return null; }
+    }
+
+    private static byte[] BuildAQuery(string host)
+    {
         ushort id = (ushort)Random.Shared.Next(0, 0x10000);
         var q = new List<byte> { (byte)(id >> 8), (byte)(id & 0xff), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 };
         q.AddRange(EncodeName(host));
         q.AddRange(new byte[] { 0, (byte)A, 0, 1 });   // qtype A, class IN
-        try
-        {
-            var resp = await UpstreamAsync(q.ToArray(), ct);
-            return resp == null ? null : FirstAAnswer(resp);
-        }
-        catch { return null; }
+        return q.ToArray();
+    }
+
+    private static async Task<byte[]?> udp_query_at(string server, byte[] msg, CancellationToken ct)
+    {
+        using var c = new UdpClient();
+        c.Connect(IPAddress.Parse(server), 53);
+        await c.SendAsync(msg, msg.Length);
+        var recv = c.ReceiveAsync(ct).AsTask();
+        if (await Task.WhenAny(recv, Task.Delay(2000, ct)) == recv) return (await recv).Buffer;
+        return null;
     }
 
     private static uint? FirstAAnswer(byte[] msg)
@@ -245,6 +273,17 @@ public sealed class DnsStub(IDnsHost host, ILog log)
             bool hasTunnel = rules.Any(r => r.Action == "Tunnel");
             if (hasTunnel)
             {
+                // Intelligent Local Access: if we've detected we're physically on a corp network
+                // (a private-network DNS probe matched), resolve tunnelled names directly against
+                // that network's DNS server and, when the answer is inside the corpnet range, hand
+                // back the REAL IP so the app connects locally instead of through the edge.
+                foreach (var net in host.ConnectedPrivateNetworks)
+                    foreach (var server in net.DnsServers)
+                    {
+                        var real = await ResolveAtAsync(qname, server);
+                        if (real is { } ip && net.Matches(ip))
+                            return qtype == A ? ReplyA(msg, ip) : NoData(msg);
+                    }
                 if (qtype == A) return ReplyA(msg, MagicFor(qname));
                 if (qtype is AAAA or HTTPS) return NoData(msg);
             }

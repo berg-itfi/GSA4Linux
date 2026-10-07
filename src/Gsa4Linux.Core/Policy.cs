@@ -36,6 +36,15 @@ public sealed class Rule
     public bool MatchIp(uint ip) => IpRanges.Any(r => r.Start <= ip && ip <= r.End);
 }
 
+/// <summary>An Intelligent Local Access private network: a DNS probe (resolve Fqdn against DnsServers;
+/// if it answers inside ResolvedRanges the device is on this corp network) and the corpnet ranges
+/// whose traffic should then bypass the tunnel and go direct.</summary>
+public sealed record PrivateNetwork(string Id, string Name, List<string> DnsServers, string Fqdn,
+                                    List<(uint Start, uint End)> ResolvedRanges)
+{
+    public bool Matches(uint ip) => ResolvedRanges.Any(r => r.Start <= ip && ip <= r.End);
+}
+
 public sealed class PrivateDnsRule
 {
     public required string Suffix { get; init; }
@@ -162,7 +171,78 @@ public sealed class Policy
                                   string.Equals(ValStr(sl), "true", StringComparison.OrdinalIgnoreCase),
                 });
         PrivateDns = pdns;
+
+        // --- Intelligent Local Access (ILA) ---------------------------------------------------
+        // apsContextData is a JSON string carrying the feature flags; the private-network probe
+        // definitions ship in the policy once the tenant enables ILA. Parsed defensively because
+        // the exact schema is only observable with the feature on.
+        try
+        {
+            if (doc.TryGetProperty("apsContextData", out var acd))
+            {
+                var ctx = acd.ValueKind == JsonValueKind.String
+                    ? JsonDocument.Parse(acd.GetString()!).RootElement : acd;
+                if (ctx.TryGetProperty("IsPrivateNetworkEnabled", out var en)) PrivateNetworkEnabled = BoolOf(en);
+                if (ctx.TryGetProperty("LocalNetworkDetectionIntervalInMs", out var iv)) LocalDetectionIntervalMs = int.Parse(ValStr(iv));
+            }
+        }
+        catch { }
+        if (LocalDetectionIntervalMs <= 0) LocalDetectionIntervalMs = 120000;
+
+        var pns = new List<PrivateNetwork>();
+        // Look for the private-network list wherever GSA puts it (top level, under policy, or ctx).
+        foreach (var holder in new[] { doc, pol })
+            foreach (var key in new[] { "privateNetworks", "PrivateNetworks" })
+                if (holder.ValueKind == JsonValueKind.Object && holder.TryGetProperty(key, out var arr) &&
+                    arr.ValueKind == JsonValueKind.Array && pns.Count == 0)
+                {
+                    RawPrivateNetworksJson = arr.GetRawText();
+                    foreach (var n in arr.EnumerateArray())
+                        pns.Add(ParsePrivateNetwork(n));
+                }
+        PrivateNetworks = pns;
     }
+
+    public bool PrivateNetworkEnabled { get; }
+    public int LocalDetectionIntervalMs { get; }
+    public IReadOnlyList<PrivateNetwork> PrivateNetworks { get; } = [];
+    /// <summary>Raw JSON of the private-network list, logged on first sight so the real schema is captured.</summary>
+    public string? RawPrivateNetworksJson { get; }
+
+    private static PrivateNetwork ParsePrivateNetwork(JsonElement n)
+    {
+        string Str(params string[] keys)
+        {
+            foreach (var k in keys) if (n.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String) return v.GetString()!;
+            return "";
+        }
+        var dns = new List<string>();
+        foreach (var k in new[] { "dnsServers", "DnsServers", "DNSServers" })
+            if (n.TryGetProperty(k, out var ds) && ds.ValueKind == JsonValueKind.Array)
+                foreach (var s in ds.EnumerateArray()) dns.Add(s.GetString() ?? ValStr(s));
+        var ranges = new List<(uint, uint)>();
+        foreach (var k in new[] { "resolvedToIps", "resolvedTo", "ResolvedTo", "ips", "address" })
+            if (n.TryGetProperty(k, out var rr))
+                CollectRanges(rr, ranges);
+        return new PrivateNetwork(Str("id", "Id"), Str("name", "Name"), dns, Str("fqdn", "Fqdn", "fullyQualifiedDomainName"), ranges);
+    }
+
+    private static void CollectRanges(JsonElement e, List<(uint, uint)> outp)
+    {
+        if (e.ValueKind == JsonValueKind.Array)
+            foreach (var x in e.EnumerateArray()) CollectRanges(x, outp);
+        else if (e.ValueKind == JsonValueKind.Object)
+        {
+            if (e.TryGetProperty("start", out var s) && e.TryGetProperty("end", out var en2))
+            { try { outp.Add((ParseIp(s), ParseIp(en2))); } catch { } }
+            else if (e.TryGetProperty("ips", out var ips)) CollectRanges(ips, outp);
+        }
+        else if (e.ValueKind == JsonValueKind.String)
+        { try { var v = Packet.Aton(e.GetString()!); outp.Add((v, v)); } catch { } }
+    }
+
+    private static uint ParseIp(JsonElement e) =>
+        e.ValueKind == JsonValueKind.String && e.GetString()!.Contains('.') ? Packet.Aton(e.GetString()!) : ParseU(e);
 
     public const string EdgeSuffix = ".globalsecureaccess.microsoft.com";
 
