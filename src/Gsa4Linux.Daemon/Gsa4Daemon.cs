@@ -316,7 +316,8 @@ public sealed class Gsa4Daemon : IDnsHost
         {
             // The most-specific matching rule is authoritative. We do NOT fall through to a broader
             // rule/app when its token can't be obtained, so a per-app Conditional Access policy
-            // (e.g. MFA on gsa-vm-fs) can't be silently bypassed via the Quick Access grant.
+            // (e.g. MFA required on a specific app segment) can't be silently bypassed via a
+            // broader grant such as Quick Access.
             var w = rules[0];
             if (!byId.TryGetValue(w.ChannelId, out var wc)) return;
             flow = new Flow(this, new List<(ControlChannel, Rule)> { (wc, w) }, key, raw, host, _log);
