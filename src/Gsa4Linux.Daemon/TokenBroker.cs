@@ -83,16 +83,43 @@ public sealed class TokenBroker(ILog log)
         }
     }
 
-    public async Task<string> GetAsync(TokenContext ctx, string? claims = null, bool force = false,
-                                       TimeSpan? timeout = null)
+    private readonly ConcurrentDictionary<string, long> _lastInteractive = new();
+
+    public Task<string> GetAsync(TokenContext ctx, string? claims = null, bool force = false,
+                                 TimeSpan? timeout = null)
+        => RequestAsync(ctx, claims, interactive: false, force, timeout ?? TimeSpan.FromSeconds(60));
+
+    /// <summary>
+    /// Fire-and-forget interactive acquisition for a scope whose silent acquisition needs an MFA/CA
+    /// step-up. Opens the broker UI once (cooldowned so retransmits don't spam prompts); on success
+    /// the token is cached, so the user's next attempt to the resource succeeds silently.
+    /// </summary>
+    public void PrewarmInteractive(TokenContext ctx)
+    {
+        var key = (ctx.ClientId, ctx.Scope, ctx.RedirectUri);
+        long now = Environment.TickCount64;
+        if (_cache.TryGetValue(key, out var hit) && hit.Exp - 300 > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            return; // already have a usable token
+        if (_lastInteractive.TryGetValue(ctx.Scope, out var last) && now - last < 30_000)
+            return; // an interactive attempt ran/launched in the last 30s
+        _lastInteractive[ctx.Scope] = now;
+        log.Info($"requesting interactive MFA for {ctx.Scope}");
+        _ = Task.Run(async () =>
+        {
+            try { await RequestAsync(ctx, null, interactive: true, force: true, TimeSpan.FromSeconds(180)); }
+            catch (Exception e) { log.Info($"interactive MFA for {ctx.Scope} did not complete: {e.Message}"); }
+        });
+    }
+
+    private async Task<string> RequestAsync(TokenContext ctx, string? claims, bool interactive,
+                                            bool force, TimeSpan timeout)
     {
         var key = (ctx.ClientId, ctx.Scope, ctx.RedirectUri);
         if (!force && claims == null && _cache.TryGetValue(key, out var hit) &&
             hit.Exp - 300 > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
             return hit.Token;
 
-        var to = timeout ?? TimeSpan.FromSeconds(60);
-        using var cts = new CancellationTokenSource(to);
+        using var cts = new CancellationTokenSource(timeout);
         await WaitForAgentAsync(cts.Token);
         var agent = _agent ?? throw new InvalidOperationException("no token agent connected");
 
@@ -100,7 +127,8 @@ public sealed class TokenBroker(ILog log)
         var tcs = new TaskCompletionSource<TokenResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = tcs;
 
-        var req = new TokenRequest { Id = id, ClientId = key.ClientId, Scope = key.Scope, RedirectUri = key.RedirectUri, Claims = claims };
+        var req = new TokenRequest { Id = id, ClientId = key.ClientId, Scope = key.Scope,
+                                     RedirectUri = key.RedirectUri, Claims = claims, Interactive = interactive };
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(req) + "\n");
         await agent.WriteLock.WaitAsync(cts.Token);
         try { await agent.Stream.WriteAsync(bytes, cts.Token); }
@@ -112,6 +140,7 @@ public sealed class TokenBroker(ILog log)
             if (resp.Token == null)
                 throw new InvalidOperationException($"token for {key.Scope} failed: {resp.Error}");
             _cache[key] = (resp.Token, Jwt.Exp(resp.Token));
+            if (interactive) log.Info($"interactive MFA token cached for {key.Scope}");
             return resp.Token;
         }
     }

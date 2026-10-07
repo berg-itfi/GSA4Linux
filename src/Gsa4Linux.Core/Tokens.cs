@@ -32,6 +32,7 @@ public sealed class TokenRequest
     [JsonPropertyName("scope")] public string Scope { get; set; } = "";
     [JsonPropertyName("redirect_uri")] public string RedirectUri { get; set; } = "";
     [JsonPropertyName("claims")] public string? Claims { get; set; }
+    [JsonPropertyName("interactive")] public bool Interactive { get; set; }
 }
 
 public sealed class TokenResponse

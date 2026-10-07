@@ -33,7 +33,11 @@ public sealed class Flow(Gsa4Daemon daemon, List<(ControlChannel Ctrl, Rule Rule
                 try { appToken = await daemon.Tokens.GetAsync(rule.AppToken); }
                 catch (Exception e)
                 {
-                    log.Info($"flow {Packet.Ntoa(key.Dst)}:{key.DPort} ({host}): app_token for {rule.AppToken.Scope} unavailable ({e.Message}); trying next rule");
+                    // Silent acquisition failed — almost always a Conditional Access step-up (MFA).
+                    // Kick off an interactive prompt in the background so the user's next attempt
+                    // succeeds, and let this flow fail fast (RST) instead of bypassing the policy.
+                    log.Info($"flow {Packet.Ntoa(key.Dst)}:{key.DPort} ({host}): app_token for {rule.AppToken.Scope} needs a step-up ({e.Message}); prompting MFA");
+                    daemon.Tokens.PrewarmInteractive(rule.AppToken);
                     continue;
                 }
             }

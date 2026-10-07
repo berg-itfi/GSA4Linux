@@ -31,9 +31,18 @@ while (true)
                 var resp = new TokenResponse { Id = req.Id };
                 try
                 {
-                    resp.Token = Broker.AcquireAccessToken(
-                        new TokenContext(req.ClientId, req.Scope, req.RedirectUri), req.Claims);
-                    log.Info($"issued token for {req.Scope}");
+                    var ctx = new TokenContext(req.ClientId, req.Scope, req.RedirectUri);
+                    if (req.Interactive)
+                    {
+                        log.Info($"interactive auth for {req.Scope} (MFA/CA step-up) — launching broker UI");
+                        resp.Token = Broker.AcquireAccessTokenInteractive(ctx, req.Claims);
+                        log.Info($"interactive token issued for {req.Scope}");
+                    }
+                    else
+                    {
+                        resp.Token = Broker.AcquireAccessToken(ctx, req.Claims);
+                        log.Info($"issued token for {req.Scope}");
+                    }
                 }
                 catch (Exception e)
                 {

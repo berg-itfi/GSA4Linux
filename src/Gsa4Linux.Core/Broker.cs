@@ -58,9 +58,15 @@ public static class Broker
         return list;
     }
 
-    /// <summary>Acquire an access token silently. Returns the raw brokerTokenResponse JSON on success.</summary>
+    /// <summary>
+    /// Acquire an access token. <paramref name="method"/> is the broker D-Bus method:
+    /// "acquireTokenSilently" (no UI) or "acquireTokenInteractively" (pops a browser/WAM window so
+    /// the user can satisfy a Conditional Access step-up such as MFA). Returns the raw
+    /// brokerTokenResponse JSON on success.
+    /// </summary>
     public static JsonElement AcquireToken(string scope, string clientId, string redirectUri,
-                                           JsonElement? account = null, string? claims = null)
+                                           JsonElement? account = null, string? claims = null,
+                                           string method = "acquireTokenSilently")
     {
         account ??= GetAccounts(clientId, redirectUri).FirstOrDefault();
         if (account is not { ValueKind: JsonValueKind.Object })
@@ -77,20 +83,23 @@ public static class Broker
         };
         if (claims != null) authParameters["decodedClaims"] = claims;
 
-        var r = Call("acquireTokenSilently", new { authParameters });
-        if (r.TryGetProperty("brokerTokenResponse", out var btr))
+        var r = Call(method, new { authParameters });
+        if (r.TryGetProperty("brokerTokenResponse", out var btr) &&
+            btr.TryGetProperty("accessToken", out _))
             return btr.Clone();
-        // surface the broker's error object to the caller
-        throw new BrokerException(r.TryGetProperty("error", out var e) ? e.GetRawText() : r.GetRawText());
+        var err = r.TryGetProperty("brokerTokenResponse", out var b) ? b : r;
+        throw new BrokerException(err.TryGetProperty("error", out var e) ? e.GetRawText() : err.GetRawText());
     }
 
     public static string AcquireAccessToken(TokenContext ctx, string? claims = null)
-    {
-        var btr = AcquireToken(ctx.Scope, ctx.ClientId, ctx.RedirectUri, null, claims);
-        if (btr.TryGetProperty("accessToken", out var at) && at.GetString() is { } tok)
-            return tok;
-        throw new BrokerException(btr.GetRawText());
-    }
+        => Extract(AcquireToken(ctx.Scope, ctx.ClientId, ctx.RedirectUri, null, claims, "acquireTokenSilently"));
+
+    /// <summary>Interactive acquisition — opens himmelblau's auth UI for an MFA/CA step-up.</summary>
+    public static string AcquireAccessTokenInteractive(TokenContext ctx, string? claims = null)
+        => Extract(AcquireToken(ctx.Scope, ctx.ClientId, ctx.RedirectUri, null, claims, "acquireTokenInteractively"));
+
+    private static string Extract(JsonElement btr)
+        => btr.GetProperty("accessToken").GetString()!;
 }
 
 public sealed class BrokerException(string detail) : Exception($"broker refused: {detail}");
