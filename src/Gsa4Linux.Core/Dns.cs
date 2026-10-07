@@ -177,8 +177,14 @@ public sealed class DnsStub(IDnsHost host, ILog log)
         {
             var chans = host.ActiveChannelIds();
             var rules = pol.HostRules(qname, chans);
-            bool acquire = rules.Any(r => r.Action == "Tunnel" && r.Acquire);
-            if (acquire)
+            // Acquire a magic IP when the name is tunnelled and never bypassed in any active channel.
+            // This covers Private (acquireIfUnresolved names, all tunnel-only) and extends to the
+            // M365 profile's tunnel-only hostnames. Names with any Bypass rule (e.g. classic
+            // IMAP/SMTP on outlook.office365.com) resolve upstream and go direct, so we never
+            // black-hole a flow we can't actually bypass without a userspace TCP stack.
+            bool hasTunnel = rules.Any(r => r.Action == "Tunnel");
+            bool hasBypass = rules.Any(r => r.Action == "Bypass");
+            if (hasTunnel && !hasBypass)
             {
                 if (qtype == A) return ReplyA(msg, MagicFor(qname));
                 if (qtype is AAAA or HTTPS) return NoData(msg);

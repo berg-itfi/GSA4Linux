@@ -7,7 +7,7 @@ After=himmelblaud.service network-online.target NetworkManager.service
 [Service]
 Type=simple
 ExecStart=/opt/gsa4linux-dotnet/gsa4linuxd
-Environment=GSA4LINUX_CHANNELS=Private
+Environment=GSA4LINUX_CHANNELS=Private,M365
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Restart=on-failure
 RestartSec=5
